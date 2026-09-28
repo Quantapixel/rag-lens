@@ -235,10 +235,29 @@ Uploads accept text formats (`.txt`, `.md`, `.csv`, `.json`, `.log`). PDF and
 DOCX would need a parser dependency; the app declines them explicitly rather
 than accepting a file it can't read.
 
-Free-tier note: `gemini-embedding-001` and the `gemini-flash-latest` alias are
-the defaults, with automatic fallback if either is renamed or retired. If you
-want to pin specific models, set `VITE_GEMINI_EMBED_MODEL` /
-`VITE_GEMINI_CHAT_MODEL`.
+### Free-tier limits (read this before demoing)
+
+The Gemini free tier meters generation **per day, per model**:
+
+```
+GenerateRequestsPerDayPerProjectPerModel-FreeTier   →  20 requests / day / model
+```
+
+So you get roughly 20 questions per day for a given model. Because the quota is
+per *model* rather than per project, exhausting one model doesn't exhaust the
+next — `gemini.ts` detects this and moves to the next candidate automatically,
+and stops immediately if the limit is project-wide instead.
+
+Two things that keep usage low:
+
+- Embeddings are cached in `localStorage`, so reloading the page never re-embeds
+  the corpus. Only the question and the answer cost a call each.
+- Ingestion is one batched embedding request regardless of how many chunks a
+  document has.
+
+Models default to `gemini-embedding-001` and the `gemini-flash-latest` alias,
+with automatic fallback if either is renamed or retired. Pin specific ones with
+`VITE_GEMINI_EMBED_MODEL` / `VITE_GEMINI_CHAT_MODEL`.
 
 ## License
 

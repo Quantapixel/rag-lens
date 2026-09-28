@@ -56,7 +56,12 @@ const NOT_CHAT = /(tts|image|embedding|transcribe|robotics|lyria|computer-use|de
 const EMBED_DIM = 768
 
 export class GeminiError extends Error {
-  constructor(message: string, readonly status?: number) {
+  constructor(
+    message: string,
+    readonly status?: number,
+    /** Raw error body, kept so quota violations can be inspected. */
+    readonly body?: unknown,
+  ) {
     super(message)
     this.name = 'GeminiError'
   }
@@ -79,9 +84,30 @@ function describeError(status: number, body: unknown): string {
     return message || 'This API key is not authorised for that model.'
   }
   if (status === 429) {
-    return 'Free-tier rate limit reached. Wait a moment and retry.'
+    return isPerModelQuota(body)
+      ? 'This model has hit its free-tier daily limit. Trying another model…'
+      : 'Free-tier rate limit reached. Wait a moment and retry.'
   }
   return message || `Gemini API returned HTTP ${status}.`
+}
+
+/**
+ * The free tier meters generation per day *per model*
+ * (`GenerateRequestsPerDayPerProjectPerModel-FreeTier`, 20/day), so exhausting
+ * one model does not exhaust the next — switching is genuinely useful. Limits
+ * scoped to the project as a whole are not, and retrying those just wastes time.
+ */
+function isPerModelQuota(body: unknown): boolean {
+  const violations = (
+    body as {
+      error?: {
+        details?: { violations?: { quotaId?: string }[] }[]
+      }
+    }
+  )?.error?.details?.flatMap((d) => d.violations ?? [])
+
+  if (!violations?.length) return false
+  return violations.some((v) => /PerModel/i.test(v.quotaId ?? ''))
 }
 
 async function call<T>(
@@ -111,7 +137,7 @@ async function call<T>(
     json = text
   }
 
-  if (!res.ok) throw new GeminiError(describeError(res.status, json), res.status)
+  if (!res.ok) throw new GeminiError(describeError(res.status, json), res.status, json)
   return json as T
 }
 
@@ -232,7 +258,13 @@ async function withModel<T>(
       lastError = err
       const status = err instanceof GeminiError ? err.status : undefined
       if (status === 400 || status === 403) throw err
-      // Otherwise: retired (404) or overloaded (5xx) — try the next candidate.
+      // A per-model daily quota means the next model has its own budget, so
+      // carry on. A project-wide limit applies to every model — stop and say so
+      // rather than hammering through the list.
+      if (status === 429 && !isPerModelQuota(err instanceof GeminiError ? err.body : undefined)) {
+        throw err
+      }
+      // Otherwise: retired (404) or a 5xx that survived retries — try the next.
     }
   }
 
