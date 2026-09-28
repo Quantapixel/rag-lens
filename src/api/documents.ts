@@ -54,7 +54,9 @@ export async function uploadDocument(file: File): Promise<ApiResponse<Document>>
     size: `${(file.size / 1_000_000).toFixed(2)} MB`,
     pages: 0,
     chunks: 0,
-    status: 'processing' as const,
+    // Marked indexed up front: `getChunks()` only returns indexed documents, so
+    // the new chunks become searchable as soon as ensureIndex() sees them.
+    status: 'indexed' as const,
     color: UPLOAD_TONES[uploadTone++ % UPLOAD_TONES.length],
     topics: [],
     uploadedAt: new Date().toISOString(),
@@ -89,14 +91,12 @@ export async function uploadDocument(file: File): Promise<ApiResponse<Document>>
 
   // Without a key we can still keep the text and let the offline scorer use it.
   if (!hasApiKey()) {
-    updateDocument(doc.id, { status: 'indexed' })
-    return { data: { ...doc, status: 'indexed' } }
+    return { data: doc }
   }
 
   try {
     await ensureIndex(getChunks())
-    updateDocument(doc.id, { status: 'indexed' })
-    return { data: { ...doc, status: 'indexed' } }
+    return { data: doc }
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Embedding failed.'
     updateDocument(doc.id, { status: 'error' })

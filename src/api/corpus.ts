@@ -38,10 +38,17 @@ export function getDocumentById(id: string): Document | null {
   return entries.find((e) => e.doc.id === id)?.doc ?? null
 }
 
-/** Every chunk in the corpus, in insertion order. */
+/**
+ * Every searchable chunk, in insertion order.
+ *
+ * Only documents that have finished indexing contribute — a document still
+ * being processed must not appear in retrieval results, or "processing" in the
+ * sidebar would be a lie.
+ */
 export function getChunks(): CorpusChunk[] {
   const out: CorpusChunk[] = []
   for (const entry of entries) {
+    if (entry.doc.status !== 'indexed') continue
     entry.chunks.forEach((text, i) => {
       out.push({ id: `${entry.doc.id}:${i}`, docId: entry.doc.id, text })
     })
@@ -50,7 +57,7 @@ export function getChunks(): CorpusChunk[] {
 }
 
 export function totalChunks(): number {
-  return entries.reduce((sum, e) => sum + e.chunks.length, 0)
+  return getChunks().length
 }
 
 /**

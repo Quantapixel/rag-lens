@@ -191,6 +191,11 @@ export default function App() {
   const indexedCount = documents.filter((d) => d.status === 'indexed').length
   const activeDoc = documents.find((d) => d.id === activeDocId) ?? null
   const highlightIds = useMemo(() => answer?.sourceDocs ?? [], [answer])
+  // Only show legend entries for edge types actually present in the graph.
+  const edgeTypes = useMemo(
+    () => [...new Set(connections.map((c) => c.type))],
+    [connections],
+  )
   const models = activeModels()
 
   // ── Render ─────────────────────────────────────────────────────────────────
@@ -397,6 +402,7 @@ export default function App() {
           documents={documents}
           activeDocId={activeDocId}
           uploading={uploading}
+          edgeTypes={edgeTypes}
           uploadError={uploadError}
           onUpload={handleUpload}
           onSelectDoc={setActiveDocId}
