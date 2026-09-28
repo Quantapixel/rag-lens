@@ -44,7 +44,8 @@ export default function DocumentList({ documents, activeDocId, onSelectDoc }: Do
               <StatusChip status={doc.status} />
               {doc.status === 'indexed' && (
                 <span className="text-[10px]" style={{ color: '#52525b' }}>
-                  {doc.pages}p · {doc.chunks} chunks
+                  {doc.pages > 0 ? `${doc.pages}p · ` : ''}
+                  {doc.chunks} chunks
                 </span>
               )}
             </div>

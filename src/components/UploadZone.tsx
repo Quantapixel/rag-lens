@@ -3,13 +3,7 @@
  */
 
 import { useRef, useState } from 'react'
-
-/**
- * Text formats only. PDF and DOCX would need a parser dependency; the app
- * reads file contents directly so it can chunk and embed them locally.
- */
-const ACCEPTED_EXTENSIONS = ['.txt', '.md', '.markdown', '.csv', '.json', '.log', '.tsv']
-const ACCEPTED_TYPES = ['text/plain', 'text/markdown', 'text/csv', 'application/json']
+import { isSupportedFile, SUPPORTED_EXTENSIONS } from '../api'
 
 interface UploadZoneProps {
   onUpload: (file: File) => void
@@ -23,12 +17,9 @@ export default function UploadZone({ onUpload, disabled = false }: UploadZonePro
   const handleFiles = (files: FileList | null) => {
     if (!files) return
     Array.from(files).forEach((file) => {
-      if (
-        ACCEPTED_TYPES.includes(file.type) ||
-        ACCEPTED_EXTENSIONS.some((ext) => file.name.endsWith(ext))
-      ) {
-        onUpload(file)
-      }
+      // Unsupported files are still passed through so the ingest layer can
+      // explain why, rather than the drop silently doing nothing.
+      onUpload(file)
     })
   }
 
@@ -44,7 +35,7 @@ export default function UploadZone({ onUpload, disabled = false }: UploadZonePro
         ref={inputRef}
         type="file"
         multiple
-        accept={ACCEPTED_EXTENSIONS.join(',')}
+        accept={SUPPORTED_EXTENSIONS.join(',')}
         className="hidden"
         onChange={(e) => handleFiles(e.target.files)}
       />
@@ -65,7 +56,7 @@ export default function UploadZone({ onUpload, disabled = false }: UploadZonePro
       >
         <span className="text-lg" style={{ color: dragging ? '#fafafa' : '#a1a1aa' }}>+</span>
         <span>{dragging ? 'Drop to upload' : 'Upload documents'}</span>
-        <span style={{ color: '#52525b', fontSize: 10 }}>TXT · MD · CSV · JSON</span>
+        <span style={{ color: '#52525b', fontSize: 10 }}>PDF · DOCX · TXT · MD · CSV</span>
       </button>
     </>
   )

@@ -70,7 +70,10 @@ export default function DocumentDetails({
         <div className="flex gap-3 text-xs" style={{ color: '#71717a' }}>
           <StatusChip status={activeDoc.status} />
           {activeDoc.status === 'indexed' && (
-            <span>{activeDoc.pages} pages · {activeDoc.size}</span>
+            <span>
+              {activeDoc.pages > 0 ? `${activeDoc.pages} pages · ` : ''}
+              {activeDoc.size}
+            </span>
           )}
         </div>
       </div>

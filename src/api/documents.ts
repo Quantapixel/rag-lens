@@ -2,10 +2,8 @@
  * Document service.
  *
  * Ingestion is real: the file's text is read, split into overlapping chunks,
- * embedded, and added to the in-browser vector index. Text formats only —
- * PDF and DOCX need a parser, and pulling one in would mean shipping a
- * several-hundred-kilobyte dependency to do something the browser can't do
- * natively. The UI says so rather than failing silently.
+ * embedded, and added to the in-browser vector index. PDF and DOCX are parsed
+ * by lazily-loaded parsers (see extract.ts) so the main bundle stays small.
  */
 
 import type { Document, ApiResponse } from '../types'
@@ -19,18 +17,17 @@ import {
 } from './corpus'
 import { ensureIndex, clearEmbeddingCache, indexedCount } from './vectorStore'
 import { hasApiKey } from './apiKey'
-
-/** Extensions we can read as text without a parser dependency. */
-const TEXT_EXTENSIONS = ['.txt', '.md', '.markdown', '.csv', '.json', '.log', '.tsv']
+import { extractText, fileKind, SUPPORTED_EXTENSIONS } from './extract'
 
 /** Neutral tones, cycled so uploaded documents stay visually distinct. */
 const UPLOAD_TONES = ['#d4d4d8', '#a1a1aa', '#8a8a93', '#71717a']
 let uploadTone = 0
 
 export function isSupportedFile(file: File): boolean {
-  const name = file.name.toLowerCase()
-  return file.type.startsWith('text/') || TEXT_EXTENSIONS.some((ext) => name.endsWith(ext))
+  return fileKind(file) !== 'unsupported'
 }
+
+export { SUPPORTED_EXTENSIONS }
 
 /** Fetch all documents in the workspace */
 export async function listDocuments(): Promise<ApiResponse<Document[]>> {
@@ -62,20 +59,25 @@ export async function uploadDocument(file: File): Promise<ApiResponse<Document>>
     uploadedAt: new Date().toISOString(),
   }
 
-  if (!isSupportedFile(file)) {
+  const kind = fileKind(file)
+  if (kind === 'unsupported') {
     return {
       data: { ...placeholder, id: '', status: 'error' },
-      error: `${file.name}: unsupported format. Upload a text file (.txt, .md, .csv, .json, .log).`,
+      error: `${file.name}: unsupported format. Supported: ${SUPPORTED_EXTENSIONS.join(', ')}.`,
     }
   }
 
   let text: string
+  let pages: number | undefined
   try {
-    text = await file.text()
-  } catch {
+    const extracted = await extractText(file)
+    text = extracted.text
+    pages = extracted.pages
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : 'the file could not be read'
     return {
       data: { ...placeholder, id: '', status: 'error' },
-      error: `${file.name}: the file could not be read.`,
+      error: `${file.name}: ${reason}.`,
     }
   }
 
@@ -87,7 +89,7 @@ export async function uploadDocument(file: File): Promise<ApiResponse<Document>>
     }
   }
 
-  const doc = addDocument(placeholder, chunks)
+  const doc = addDocument({ ...placeholder, pages: pages ?? 0 }, chunks)
 
   // Without a key we can still keep the text and let the offline scorer use it.
   if (!hasApiKey()) {

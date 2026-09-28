@@ -51,8 +51,8 @@ retriever silently ignored.
   edges between two cited documents light up.
 - **Connection inspector** — for any selected document, see every related
   document with the reason for the link and a confidence bar.
-- **Real ingestion** — drop in a text file and it is chunked, embedded and
-  searchable immediately.
+- **Real ingestion** — drop in a **PDF, Word (.docx)**, or text file and it is
+  parsed, chunked, embedded and searchable immediately.
 - **One-click example questions** — jump straight into the interesting parts
   of the corpus.
 - **Honest fallback** — with no API key the app switches to a bundled keyword
@@ -117,6 +117,7 @@ src/
     index.ts              barrel export — the only surface App imports
     apiKey.ts             key resolution (runtime paste, then build-time env)
     gemini.ts             REST client: embeddings + generation, model probing
+    extract.ts            PDF / DOCX / text extraction (lazy parsers)
     corpus.ts             the document store, chunking, text ingestion
     vectorStore.ts        embedding index, localStorage cache, cosine search
     documents.ts          list / get / ingest / delete
@@ -141,6 +142,8 @@ DB and `gemini.ts` with your own endpoint. Nothing else changes.
 - **Tailwind CSS v4** (`@tailwindcss/vite`)
 - **Google Gemini free tier** for embeddings and generation, called directly
   over REST — no SDK, no server, no billing
+- **pdf.js** and **fflate** for PDF/DOCX parsing, both code-split and loaded
+  only when a file of that type is uploaded
 - Canvas 2D for the graph — no charting dependency, a hand-rolled force
   simulation so the frame loop owns node state without React re-renders.
 
@@ -231,9 +234,18 @@ The seeded corpus is five short sample documents, each split into a handful of
 chunks — small enough that indexing costs one API call and fits comfortably in
 `localStorage`.
 
-Uploads accept text formats (`.txt`, `.md`, `.csv`, `.json`, `.log`). PDF and
-DOCX would need a parser dependency; the app declines them explicitly rather
-than accepting a file it can't read.
+Uploads accept **PDF**, **DOCX** and plain text (`.txt`, `.md`, `.csv`, `.json`,
+`.log`, `.tsv`). Both parsers are loaded on demand, so they cost the initial
+bundle nothing:
+
+- **PDF** — [pdf.js](https://mozilla.github.io/pdf.js/) (`pdfjs-dist`). Pulled
+  in only when a PDF is dropped; the main bundle stays ~241 kB while the parser
+  and its worker load lazily. Page count is read from the document and shown in
+  the sidebar, and soft hyphenation across line breaks is repaired.
+- **DOCX** — unzipped with [fflate](https://github.com/101arrowz/fflate) (~5 kB)
+  and the OOXML read directly. `word/document.xml` plus any headers, footers,
+  footnotes and endnotes are converted to text, preserving paragraph breaks and
+  decoding XML entities.
 
 ### Free-tier limits (read this before demoing)
 
