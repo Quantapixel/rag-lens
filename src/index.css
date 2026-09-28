@@ -1,0 +1,76 @@
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap');
+@import 'tailwindcss';
+
+@theme {
+  --font-sans: 'Inter', sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+
+  /* Neutral, near-monochrome palette. Accent is white — used sparingly for
+     primary actions and active state, never for decoration. */
+  --color-bg: #09090b;
+  --color-surface: #0d0d0f;
+  --color-surface-2: #141417;
+  --color-border: #1e1e22;
+  --color-border-bright: #2e2e35;
+  --color-accent: #fafafa;
+  --color-accent-dim: rgba(250, 250, 250, 0.06);
+  --color-muted: #71717a;
+  --color-text: #f4f4f5;
+  --color-text-dim: #a1a1aa;
+  --color-text-bright: #ffffff;
+
+  /* Muted semantic colours — reserved for status, never for decoration */
+  --color-danger: #cf6f6f;
+  --color-warn: #c2a24a;
+  --color-success: #6aa87f;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  background-color: #09090b;
+  color: #f4f4f5;
+  font-family: 'Inter', sans-serif;
+}
+
+/* Faint neutral vignette — depth without colour */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(70% 55% at 50% -15%, rgba(255, 255, 255, 0.045), transparent 72%);
+  z-index: -1;
+}
+
+::selection {
+  background: rgba(250, 250, 250, 0.16);
+  color: #fafafa;
+}
+
+input::placeholder {
+  color: #52525b;
+}
+
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #2e2e35;
+  border-radius: 2px;
+}
+
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fade-in {
+  animation: fade-in 0.28s ease-out both;
+}

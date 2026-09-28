@@ -1,0 +1,11 @@
+{
+  "title": "RAG Lens",
+  "description": "See inside your AI's knowledge. RAG Lens maps your document corpus as a relationship graph and traces every answer back to the exact chunks it was built from.",
+  "robots": {
+    "index": true
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}

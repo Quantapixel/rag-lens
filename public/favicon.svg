@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="RAG Lens">
+  <rect width="32" height="32" rx="7" fill="#fafafa" />
+  <g stroke="#09090b" stroke-width="1.7" stroke-linecap="round">
+    <path d="M16 10.5 L9.5 21 M16 10.5 L22.5 21 M9.5 21 L22.5 21" fill="none" />
+  </g>
+  <g fill="#09090b">
+    <circle cx="16" cy="10.5" r="3.1" />
+    <circle cx="9.5" cy="21" r="2.6" />
+    <circle cx="22.5" cy="21" r="2.6" />
+  </g>
+</svg>
