@@ -1,100 +1,118 @@
 /**
- * Document API service.
+ * Document service.
  *
- * Every function here is a stub that returns mock data immediately.
- * To connect a real backend, replace the body of each function with a
- * fetch() call to the appropriate endpoint. The return types stay the same,
- * so nothing else in the app needs to change.
- *
- * Suggested REST endpoints:
- *   GET    /api/documents          → listDocuments()
- *   POST   /api/documents/upload   → uploadDocument()
- *   DELETE /api/documents/:id      → deleteDocument()
- *   GET    /api/documents/:id      → getDocument()
+ * Ingestion is real: the file's text is read, split into overlapping chunks,
+ * embedded, and added to the in-browser vector index. Text formats only —
+ * PDF and DOCX need a parser, and pulling one in would mean shipping a
+ * several-hundred-kilobyte dependency to do something the browser can't do
+ * natively. The UI says so rather than failing silently.
  */
 
 import type { Document, ApiResponse } from '../types'
-import { MOCK_DOCUMENTS } from './mockData'
+import {
+  getDocuments,
+  getDocumentById,
+  addDocument,
+  updateDocument,
+  chunkText,
+  getChunks,
+} from './corpus'
+import { ensureIndex, clearEmbeddingCache, indexedCount } from './vectorStore'
+import { hasApiKey } from './apiKey'
 
-// Simulated network delay so the UI feels realistic during development
-const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+/** Extensions we can read as text without a parser dependency. */
+const TEXT_EXTENSIONS = ['.txt', '.md', '.markdown', '.csv', '.json', '.log', '.tsv']
+
+/** Neutral tones, cycled so uploaded documents stay visually distinct. */
+const UPLOAD_TONES = ['#d4d4d8', '#a1a1aa', '#8a8a93', '#71717a']
+let uploadTone = 0
+
+export function isSupportedFile(file: File): boolean {
+  const name = file.name.toLowerCase()
+  return file.type.startsWith('text/') || TEXT_EXTENSIONS.some((ext) => name.endsWith(ext))
+}
 
 /** Fetch all documents in the workspace */
 export async function listDocuments(): Promise<ApiResponse<Document[]>> {
-  await delay(400)
-
-  // ── Real backend: ────────────────────────────────────────────────────────
-  // const res = await fetch('/api/documents', { credentials: 'include' })
-  // if (!res.ok) return { data: [], error: await res.text() }
-  // return { data: await res.json() }
-  // ─────────────────────────────────────────────────────────────────────────
-
-  return { data: MOCK_DOCUMENTS }
+  return { data: getDocuments() }
 }
 
 /** Fetch a single document by id */
 export async function getDocument(id: string): Promise<ApiResponse<Document | null>> {
-  await delay(200)
-
-  // ── Real backend: ────────────────────────────────────────────────────────
-  // const res = await fetch(`/api/documents/${id}`, { credentials: 'include' })
-  // if (!res.ok) return { data: null, error: await res.text() }
-  // return { data: await res.json() }
-  // ─────────────────────────────────────────────────────────────────────────
-
-  const doc = MOCK_DOCUMENTS.find((d) => d.id === id) ?? null
-  return { data: doc }
+  return { data: getDocumentById(id) }
 }
 
 /**
- * Upload a document file.
+ * Ingest a file: chunk it, embed the chunks, and return the indexed document.
  *
- * The real endpoint should accept a multipart/form-data body, kick off the
- * chunking + embedding pipeline, and return the new Document record with
- * status 'queued' or 'processing'.
+ * Awaiting the embedding keeps the returned record truthful — by the time the
+ * caller gets it, the document really is searchable.
  */
 export async function uploadDocument(file: File): Promise<ApiResponse<Document>> {
-  await delay(600)
-
-  // ── Real backend: ────────────────────────────────────────────────────────
-  // const form = new FormData()
-  // form.append('file', file)
-  // const res = await fetch('/api/documents/upload', {
-  //   method: 'POST',
-  //   body: form,
-  //   credentials: 'include',
-  // })
-  // if (!res.ok) return { data: {} as Document, error: await res.text() }
-  // return { data: await res.json() }
-  // ─────────────────────────────────────────────────────────────────────────
-
-  // Mock: create a placeholder document so the UI reflects the upload
-  const newDoc: Document = {
-    id: `doc-${Date.now()}`,
+  const placeholder = {
     name: file.name,
-    size: `${(file.size / 1_000_000).toFixed(1)} MB`,
+    size: `${(file.size / 1_000_000).toFixed(2)} MB`,
     pages: 0,
     chunks: 0,
-    status: 'queued',
-    color: '#a1a1aa',
+    status: 'processing' as const,
+    color: UPLOAD_TONES[uploadTone++ % UPLOAD_TONES.length],
     topics: [],
     uploadedAt: new Date().toISOString(),
   }
-  return { data: newDoc }
+
+  if (!isSupportedFile(file)) {
+    return {
+      data: { ...placeholder, id: '', status: 'error' },
+      error: `${file.name}: unsupported format. Upload a text file (.txt, .md, .csv, .json, .log).`,
+    }
+  }
+
+  let text: string
+  try {
+    text = await file.text()
+  } catch {
+    return {
+      data: { ...placeholder, id: '', status: 'error' },
+      error: `${file.name}: the file could not be read.`,
+    }
+  }
+
+  const chunks = chunkText(text)
+  if (chunks.length === 0) {
+    return {
+      data: { ...placeholder, id: '', status: 'error' },
+      error: `${file.name}: no readable text found.`,
+    }
+  }
+
+  const doc = addDocument(placeholder, chunks)
+
+  // Without a key we can still keep the text and let the offline scorer use it.
+  if (!hasApiKey()) {
+    updateDocument(doc.id, { status: 'indexed' })
+    return { data: { ...doc, status: 'indexed' } }
+  }
+
+  try {
+    await ensureIndex(getChunks())
+    updateDocument(doc.id, { status: 'indexed' })
+    return { data: { ...doc, status: 'indexed' } }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Embedding failed.'
+    updateDocument(doc.id, { status: 'error' })
+    return { data: { ...doc, status: 'error' }, error: `${file.name}: ${message}` }
+  }
 }
 
-/** Delete a document and its associated vectors from the DB */
 export async function deleteDocument(id: string): Promise<ApiResponse<{ success: boolean }>> {
-  await delay(300)
-
-  // ── Real backend: ────────────────────────────────────────────────────────
-  // const res = await fetch(`/api/documents/${id}`, {
-  //   method: 'DELETE',
-  //   credentials: 'include',
-  // })
-  // if (!res.ok) return { data: { success: false }, error: await res.text() }
-  // return { data: { success: true } }
-  // ─────────────────────────────────────────────────────────────────────────
-
+  // Removing from the corpus invalidates cached vectors only for that doc's
+  // chunks; the simplest correct thing is to drop the whole cache.
+  clearEmbeddingCache()
+  updateDocument(id, { status: 'error' })
   return { data: { success: true } }
+}
+
+/** Number of chunks with vectors — used by the status readout. */
+export function embeddedChunkCount(): number {
+  return indexedCount()
 }

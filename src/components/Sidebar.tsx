@@ -12,6 +12,8 @@ interface SidebarProps {
   documents: Document[]
   activeDocId: string | null
   uploading: boolean
+  /** Message from the most recent failed ingest, if any */
+  uploadError?: string | null
   onUpload: (file: File) => void
   onSelectDoc: (id: string | null) => void
 }
@@ -20,6 +22,7 @@ export default function Sidebar({
   documents,
   activeDocId,
   uploading,
+  uploadError = null,
   onUpload,
   onSelectDoc,
 }: SidebarProps) {
@@ -31,6 +34,14 @@ export default function Sidebar({
       {/* Upload zone */}
       <div className="p-4">
         <UploadZone onUpload={onUpload} disabled={uploading} />
+        {uploadError && (
+          <p
+            className="text-[10px] leading-relaxed mt-2 px-2 py-1.5 rounded-md"
+            style={{ color: '#cf6f6f', background: 'rgba(207,111,111,0.08)' }}
+          >
+            {uploadError}
+          </p>
+        )}
       </div>
 
       {/* Document list */}

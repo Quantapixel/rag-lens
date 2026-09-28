@@ -44,6 +44,17 @@ export default function AnswerCard({ result, documents }: AnswerCardProps) {
         >
           Synthesis
         </span>
+        {/* Be explicit about whether a real model produced this */}
+        <span
+          className="text-[10px] px-2 py-0.5 rounded-full"
+          style={
+            result.mode === 'live'
+              ? { background: 'rgba(106,168,127,0.12)', color: '#6aa87f' }
+              : { background: 'rgba(194,162,74,0.12)', color: '#c2a24a' }
+          }
+        >
+          {result.mode === 'live' ? 'Gemini' : 'Offline demo'}
+        </span>
         <span className="text-[11px]" style={{ color: '#71717a' }}>
           {sourceDocs.length} source doc{sourceDocs.length !== 1 ? 's' : ''}
         </span>
@@ -62,6 +73,16 @@ export default function AnswerCard({ result, documents }: AnswerCardProps) {
       </div>
 
       <div className="max-h-[32vh] overflow-y-auto">
+        {/* Explain any fallback rather than quietly degrading */}
+        {result.notice && (
+          <p
+            className="mx-4 mt-3 text-[11px] leading-relaxed px-3 py-2 rounded-lg"
+            style={{ color: '#c2a24a', background: 'rgba(194,162,74,0.08)' }}
+          >
+            {result.notice}
+          </p>
+        )}
+
         {/* ── Answer ───────────────────────────────────────────────────── */}
         <div
           className="px-4 py-3 text-[13px] leading-relaxed whitespace-pre-line"

@@ -40,6 +40,13 @@ export interface Connection {
 
 // ─── Query / RAG types ────────────────────────────────────────────────────────
 
+/**
+ * How the answer was produced:
+ *   • live    — real embeddings + real LLM generation via the Gemini API
+ *   • offline — the built-in keyword demo, used when no API key is available
+ */
+export type RetrievalMode = 'live' | 'offline'
+
 export interface QueryResult {
   answer: string
   /** Which document ids were actually used to produce this answer */
@@ -50,6 +57,10 @@ export interface QueryResult {
   passages?: RetrievedPassage[]
   /** Timing breakdown of the RAG pipeline stages */
   steps?: PipelineStep[]
+  /** Whether these results came from a real model or the offline demo */
+  mode?: RetrievalMode
+  /** Non-fatal explanation, e.g. why we fell back to offline */
+  notice?: string
 }
 
 /** A single chunk that semantic search pulled back from the vector DB */
@@ -83,6 +94,7 @@ export interface SystemStatus {
   vectorDbOnline: boolean
   totalDocs: number
   totalChunks: number
+  mode: RetrievalMode
 }
 
 // ─── API response wrappers ────────────────────────────────────────────────────

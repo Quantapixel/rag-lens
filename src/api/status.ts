@@ -1,27 +1,36 @@
 /**
- * System status API service.
+ * System status.
  *
- * Returns the current health of the backend services (vector DB, embedding
- * pipeline, etc.) so the UI can show live status indicators.
- *
- * Suggested REST endpoint:
- *   GET /api/status  → getSystemStatus()
+ * There is no server to poll — the vector index and the model client both live
+ * in this tab, so status is derived from real local state: whether a key is
+ * configured, and how many chunks actually hold vectors.
  */
 
 import type { SystemStatus, ApiResponse } from '../types'
-import { MOCK_STATUS } from './mockData'
+import { hasApiKey, keySource } from './apiKey'
+import { getDocuments, totalChunks } from './corpus'
+import { indexedCount } from './vectorStore'
 
-const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+export interface DetailedStatus extends SystemStatus {
+  /** Chunks that currently have an embedding in the local index */
+  embeddedChunks: number
+  /** Where the active API key came from */
+  keySource: 'runtime' | 'env' | 'none'
+}
 
-/** Poll the backend for system health information */
-export async function getSystemStatus(): Promise<ApiResponse<SystemStatus>> {
-  await delay(200)
+export async function getSystemStatus(): Promise<ApiResponse<DetailedStatus>> {
+  const live = hasApiKey()
+  const docs = getDocuments()
 
-  // ── Real backend: ────────────────────────────────────────────────────────
-  // const res = await fetch('/api/status', { credentials: 'include' })
-  // if (!res.ok) return { data: { vectorDbOnline: false, totalDocs: 0, totalChunks: 0 } }
-  // return { data: await res.json() }
-  // ─────────────────────────────────────────────────────────────────────────
-
-  return { data: MOCK_STATUS }
+  return {
+    data: {
+      // "online" means real retrieval is available, not that a socket is open.
+      vectorDbOnline: live,
+      mode: live ? 'live' : 'offline',
+      totalDocs: docs.filter((d) => d.status === 'indexed').length,
+      totalChunks: totalChunks(),
+      embeddedChunks: indexedCount(),
+      keySource: keySource(),
+    },
+  }
 }

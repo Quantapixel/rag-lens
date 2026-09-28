@@ -1,23 +1,146 @@
 /**
- * Query (RAG) API service.
+ * Query (RAG) service — the real pipeline.
  *
- * The query endpoint sends a natural-language question to the backend, which
- * retrieves relevant chunks from the vector DB, runs them through an LLM, and
- * returns a synthesized answer with source attribution.
+ * Live mode (an API key is configured):
+ *   1. Embed the question with the Gemini embedding model.
+ *   2. Cosine-scan the local vector index for the top-k chunks.
+ *   3. Rescore those candidates (vector + lexical) and keep the best few.
+ *   4. Ask Gemini to answer using only those passages, with citations.
  *
- * Suggested REST endpoint:
- *   POST /api/query  → runQuery()
+ * Offline mode (no key, or the API call failed):
+ *   Falls back to the original keyword-overlap scorer so the demo always works.
+ *   Every result carries a `mode` and a human-readable `notice`, so the UI can
+ *   be honest about which one produced it.
  *
- * Request body: { question: string; documentIds?: string[] }
- * Response:     { answer: string; sourceDocs: string[]; latencyMs: number }
+ * Every timing in `steps` is a real measurement — nothing here is simulated.
  */
 
-import type { QueryResult, ApiResponse, RetrievedPassage, PipelineStep } from '../types'
-import { MOCK_DOCUMENTS } from './mockData'
+import type {
+  QueryResult,
+  ApiResponse,
+  RetrievedPassage,
+  PipelineStep,
+  RetrievalMode,
+} from '../types'
+import { getApiKey } from './apiKey'
+import { embedTexts, generate, GeminiError } from './gemini'
+import { getChunks, getDocuments } from './corpus'
+import {
+  ensureIndex,
+  searchByVector,
+  hybridRescore,
+  tokenizeForOverlap,
+} from './vectorStore'
 
-const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+const TOP_K = 6
+const KEEP = 4
 
-// Stopwords removed before keyword matching so common words don't dominate.
+export interface QueryOptions {
+  /** The natural-language question */
+  question: string
+  /** Restrict retrieval to specific document ids (optional) */
+  documentIds?: string[]
+}
+
+const now = () => performance.now()
+const ms = (start: number) => Math.max(1, Math.round(now() - start))
+
+// ─── Prompting ────────────────────────────────────────────────────────────────
+
+function buildPrompt(question: string, passages: RetrievedPassage[]): string {
+  const docs = new Map(getDocuments().map((d) => [d.id, d.name]))
+
+  const context = passages
+    .map((p, i) => `[${i + 1}] (${docs.get(p.docId) ?? p.docId}) ${p.text}`)
+    .join('\n\n')
+
+  return [
+    'You are answering a question about a small document corpus.',
+    'Use ONLY the numbered passages below. Do not use outside knowledge.',
+    'Cite the passages you rely on inline with their number, like [1] or [2][3].',
+    'If the passages do not answer the question, say so plainly instead of guessing.',
+    'Answer in 2 to 4 sentences of plain prose. Do not use headings or bullet points.',
+    '',
+    `Question: ${question}`,
+    '',
+    'Passages:',
+    context,
+  ].join('\n')
+}
+
+// ─── Live pipeline ────────────────────────────────────────────────────────────
+
+async function liveQuery(options: QueryOptions): Promise<QueryResult> {
+  const steps: PipelineStep[] = []
+  const chunks = getChunks()
+
+  // Index first — a no-op once the corpus has been embedded.
+  await ensureIndex(chunks)
+
+  // 1. Embed the question
+  let t = now()
+  const [queryVector] = await embedTexts([options.question], 'RETRIEVAL_QUERY')
+  const embedMs = ms(t)
+
+  // 2. Vector search
+  t = now()
+  const candidates = searchByVector(queryVector, TOP_K, options.documentIds)
+  const searchMs = ms(t)
+
+  // 3. Hybrid rescoring
+  t = now()
+  const passages = hybridRescore(candidates, tokenizeForOverlap(options.question)).slice(
+    0,
+    KEEP,
+  )
+  const rerankMs = ms(t)
+
+  if (passages.length === 0) {
+    return {
+      answer:
+        'Nothing in the corpus is close enough to that question to answer it. ' +
+        'Try asking about revenue, supply chain risk, APAC market share, or the strategic outlook.',
+      sourceDocs: [],
+      passages: [],
+      steps: [
+        { label: 'Embed', detail: 'Question → vector', ms: embedMs },
+        { label: 'Search', detail: `Cosine scan over ${chunks.length} chunks`, ms: searchMs },
+        { label: 'Rerank', detail: 'Hybrid rescoring', ms: rerankMs },
+        { label: 'Synthesise', detail: 'Skipped — no matches', ms: 0 },
+      ],
+      mode: 'live',
+      latencyMs: embedMs + searchMs + rerankMs,
+    }
+  }
+
+  // 4. Generate the cited answer
+  t = now()
+  const answer = await generate(buildPrompt(options.question, passages))
+  const synthMs = ms(t)
+
+  steps.push(
+    { label: 'Embed', detail: 'Question → embedding', ms: embedMs },
+    {
+      label: 'Search',
+      detail: `Cosine scan over ${chunks.length} chunks`,
+      ms: searchMs,
+    },
+    { label: 'Rerank', detail: `Hybrid rescoring → top ${passages.length}`, ms: rerankMs },
+    { label: 'Synthesise', detail: 'Gemini answer with citations', ms: synthMs },
+  )
+
+  return {
+    answer,
+    sourceDocs: [...new Set(passages.map((p) => p.docId))],
+    passages,
+    steps,
+    mode: 'live',
+    latencyMs: embedMs + searchMs + rerankMs + synthMs,
+  }
+}
+
+// ─── Offline fallback ─────────────────────────────────────────────────────────
+
 const STOPWORDS = new Set([
   'the', 'a', 'an', 'and', 'or', 'of', 'to', 'in', 'on', 'for', 'is', 'are',
   'was', 'were', 'what', 'which', 'who', 'how', 'why', 'when', 'where', 'does',
@@ -33,50 +156,38 @@ function tokenize(text: string): string[] {
     .filter((t) => t.length > 2 && !STOPWORDS.has(t))
 }
 
-/**
- * Loose token match — treats words sharing a 4+ character prefix as equal so
- * "vendor"/"vendors" and "decline"/"declined" line up without a real stemmer.
- */
+/** Prefix match so "vendor"/"vendors" line up without a real stemmer. */
 function tokensMatch(a: string, b: string): boolean {
   if (a === b) return true
   if (a.length < 4 || b.length < 4) return false
   return a.startsWith(b) || b.startsWith(a)
 }
 
-/**
- * Mock retrieval: score every passage by keyword overlap with the question
- * (a stand-in for cosine similarity over embeddings) and return the top
- * matches. This keeps the demo responsive — different questions surface
- * different passages.
- */
-function retrieve(question: string): RetrievedPassage[] {
+function retrieveOffline(question: string): RetrievedPassage[] {
   const qTokens = tokenize(question)
+  const corpus = getDocuments()
+
   if (qTokens.length === 0) {
-    // No usable keywords — fall back to the first passage of each indexed doc.
-    return MOCK_DOCUMENTS.filter((d) => d.status === 'indexed')
+    return corpus
+      .filter((d) => d.status === 'indexed')
       .slice(0, 3)
       .map((d) => ({ docId: d.id, text: d.excerpts?.[0] ?? '', score: 0.5 }))
   }
 
   const scored: RetrievedPassage[] = []
-  for (const doc of MOCK_DOCUMENTS) {
+  for (const doc of corpus) {
     if (doc.status !== 'indexed' && doc.status !== 'processing') continue
     for (const text of doc.excerpts ?? []) {
       const tokens = tokenize(text)
       if (tokens.length === 0) continue
-      // How much of the question's vocabulary this passage covers.
-      const matched = qTokens.filter((q) =>
-        tokens.some((t) => tokensMatch(q, t)),
-      ).length
+
+      const matched = qTokens.filter((q) => tokens.some((t) => tokensMatch(q, t))).length
       const coverage = matched / qTokens.length
       if (coverage === 0) continue
 
-      // Topic matches are strong signals, worth a small boost.
-      const topicHit = doc.topics.some((topic) => {
-        const tt = tokenize(topic)
-        return tt.some((t) => qTokens.some((q) => tokensMatch(q, t)))
-      })
-      // Squash into a believable 0.4–0.97 "cosine similarity" for display.
+      const topicHit = doc.topics.some((topic) =>
+        tokenize(topic).some((t) => qTokens.some((q) => tokensMatch(q, t))),
+      )
       const score = Math.min(
         0.97,
         0.4 + coverage * 0.4 + (topicHit ? 0.1 : 0) + 0.08 / Math.sqrt(tokens.length),
@@ -89,23 +200,21 @@ function retrieve(question: string): RetrievedPassage[] {
   return scored.slice(0, 5)
 }
 
-/** Compose a synthesised answer from the retrieved passages. */
-function synthesize(passages: RetrievedPassage[]): string {
+function synthesizeOffline(passages: RetrievedPassage[]): string {
   if (passages.length === 0) {
     return (
       "I couldn't find relevant passages for that question in the indexed documents. " +
       'Try asking about revenue, supply chain risk, APAC market share, or the strategic outlook.'
     )
   }
-  const docName = (id: string) => MOCK_DOCUMENTS.find((d) => d.id === id)?.name ?? id
-  const lead = passages[0]
-  const supporting = passages.slice(1, 2)
+  const name = (id: string) => getDocuments().find((d) => d.id === id)?.name ?? id
+  const [lead, ...rest] = passages
 
   const lines = [
-    `Across the corpus, ${docName(lead.docId)} carries the strongest signal: ${lead.text}`,
+    `Across the corpus, ${name(lead.docId)} carries the strongest signal: ${lead.text}`,
   ]
-  for (const p of supporting) {
-    lines.push(`${docName(p.docId)} corroborates this — ${p.text}`)
+  for (const p of rest.slice(0, 1)) {
+    lines.push(`${name(p.docId)} corroborates this — ${p.text}`)
   }
   lines.push(
     `Synthesised from ${new Set(passages.map((p) => p.docId)).size} source document(s) ` +
@@ -114,67 +223,67 @@ function synthesize(passages: RetrievedPassage[]): string {
   return lines.join('\n')
 }
 
-export interface QueryOptions {
-  /** The natural-language question */
-  question: string
-  /**
-   * Optional: restrict retrieval to specific document ids.
-   * If omitted, the backend searches across all indexed documents.
-   */
-  documentIds?: string[]
+function offlineQuery(question: string, notice: string): QueryResult {
+  const t = now()
+  const passages = retrieveOffline(question)
+  const searchMs = ms(t)
+  const answer = synthesizeOffline(passages)
+
+  return {
+    answer,
+    sourceDocs: [...new Set(passages.map((p) => p.docId))],
+    passages,
+    steps: [
+      { label: 'Tokenise', detail: 'Question → keywords', ms: Math.max(1, Math.round(searchMs / 2)) },
+      { label: 'Match', detail: 'Keyword overlap over excerpts', ms: searchMs },
+      { label: 'Synthesise', detail: 'Template (no model call)', ms: 1 },
+    ],
+    mode: 'offline',
+    notice,
+    latencyMs: searchMs,
+  }
+}
+
+// ─── Entry point ──────────────────────────────────────────────────────────────
+
+function errorMessage(err: unknown): string {
+  if (err instanceof GeminiError) return err.message
+  if (err instanceof Error) return err.message
+  return 'Unknown error'
 }
 
 /**
- * Send a question to the RAG pipeline and return a synthesized answer.
+ * Send a question to the RAG pipeline.
  *
- * The mock returns a canned response after a short delay to simulate LLM
- * latency. Replace the body with a real fetch() once the backend exists.
+ * Uses the live Gemini pipeline when a key is configured, and falls back to the
+ * offline keyword demo otherwise — surfacing which path ran rather than
+ * silently pretending.
  */
-export async function runQuery(options: QueryOptions): Promise<ApiResponse<QueryResult>> {
-  const start = Date.now()
-  await delay(700)
-
-  // ── Real backend: ────────────────────────────────────────────────────────
-  // const res = await fetch('/api/query', {
-  //   method: 'POST',
-  //   headers: { 'Content-Type': 'application/json' },
-  //   credentials: 'include',
-  //   body: JSON.stringify({
-  //     question: options.question,
-  //     documentIds: options.documentIds,
-  //   }),
-  // })
-  // if (!res.ok) return { data: { answer: '', sourceDocs: [] }, error: await res.text() }
-  // const json = await res.json()
-  // return { data: json }
-  // ─────────────────────────────────────────────────────────────────────────
-
-  const passages = retrieve(options.question)
-  if (options.documentIds?.length) {
-    const allowed = new Set(options.documentIds)
-    const filtered = passages.filter((p) => allowed.has(p.docId))
-    if (filtered.length) passages.splice(0, passages.length, ...filtered)
+export async function runQuery(
+  options: QueryOptions,
+): Promise<ApiResponse<QueryResult>> {
+  if (!getApiKey()) {
+    return {
+      data: offlineQuery(
+        options.question,
+        'No API key configured — this answer came from the offline keyword demo. Add a free Gemini key to run real retrieval.',
+      ),
+    }
   }
 
-  // Build a timing breakdown so the UI can show where the time went.
-  const embedMs = 38 + Math.round(Math.random() * 24)
-  const searchMs = 12 + Math.round(Math.random() * 10)
-  const rerankMs = 9 + Math.round(Math.random() * 8)
-  const synthMs = 320 + Math.round(Math.random() * 240)
-  const steps: PipelineStep[] = [
-    { label: 'Embed',   detail: 'Question → 1536-d vector',       ms: embedMs },
-    { label: 'Search',  detail: 'Top-k over 1.2K chunks',         ms: searchMs },
-    { label: 'Rerank',  detail: 'Cross-encoder rescoring',        ms: rerankMs },
-    { label: 'Synthesise', detail: 'LLM answer with citations',   ms: synthMs },
-  ]
-
-  return {
-    data: {
-      answer: synthesize(passages),
-      sourceDocs: Array.from(new Set(passages.map((p) => p.docId))),
-      passages,
-      steps,
-      latencyMs: Date.now() - start,
-    },
+  try {
+    return { data: await liveQuery(options) }
+  } catch (err) {
+    return {
+      data: offlineQuery(
+        options.question,
+        `Live retrieval failed (${errorMessage(err)}) — falling back to the offline demo.`,
+      ),
+    }
   }
+}
+
+/** Which mode a query would run in right now. */
+export function currentMode(): RetrievalMode {
+  return getApiKey() ? 'live' : 'offline'
 }

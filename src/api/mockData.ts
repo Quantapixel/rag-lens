@@ -3,7 +3,7 @@
  * Delete this file and remove its imports once the real backend is wired up.
  */
 
-import type { Document, Connection, SystemStatus } from '../types'
+import type { Document, Connection } from '../types'
 
 export const MOCK_DOCUMENTS: Document[] = [
   {
@@ -129,9 +129,3 @@ export const MOCK_CONNECTIONS: Connection[] = [
       'Risk Assessment mitigation timeline aligns with strategic initiatives in the August Board Memo.',
   },
 ]
-
-export const MOCK_STATUS: SystemStatus = {
-  vectorDbOnline: true,
-  totalDocs: MOCK_DOCUMENTS.filter((d) => d.status === 'indexed').length,
-  totalChunks: MOCK_DOCUMENTS.reduce((sum, d) => sum + d.chunks, 0),
-}

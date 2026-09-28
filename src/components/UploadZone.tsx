@@ -4,12 +4,12 @@
 
 import { useRef, useState } from 'react'
 
-const ACCEPTED_TYPES = [
-  'application/pdf',
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  'text/plain',
-]
-const ACCEPTED_EXTENSIONS = ['.pdf', '.docx', '.txt']
+/**
+ * Text formats only. PDF and DOCX would need a parser dependency; the app
+ * reads file contents directly so it can chunk and embed them locally.
+ */
+const ACCEPTED_EXTENSIONS = ['.txt', '.md', '.markdown', '.csv', '.json', '.log', '.tsv']
+const ACCEPTED_TYPES = ['text/plain', 'text/markdown', 'text/csv', 'application/json']
 
 interface UploadZoneProps {
   onUpload: (file: File) => void
@@ -65,7 +65,7 @@ export default function UploadZone({ onUpload, disabled = false }: UploadZonePro
       >
         <span className="text-lg" style={{ color: dragging ? '#fafafa' : '#a1a1aa' }}>+</span>
         <span>{dragging ? 'Drop to upload' : 'Upload documents'}</span>
-        <span style={{ color: '#52525b', fontSize: 10 }}>PDF · DOCX · TXT</span>
+        <span style={{ color: '#52525b', fontSize: 10 }}>TXT · MD · CSV · JSON</span>
       </button>
     </>
   )
